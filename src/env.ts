@@ -74,6 +74,20 @@ const envSchema = z.object({
   RATE_LIMIT_WINDOW: z.string().default('1 minute'),
   /** BullMQ concurrency for the receipt vision pipeline. */
   RECEIPT_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  /** Max time (ms) a single Gemini API call may take before aborting. */
+  GEMINI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  /** Max time (ms) a BullMQ job may hold a worker slot (lockDuration). */
+  JOB_LOCK_DURATION_MS: z.coerce.number().int().positive().default(5 * 60 * 1000),
+  /** Max time (ms) a BullMQ job may run before being forcibly stalled. */
+  JOB_TIMEOUT_MS: z.coerce.number().int().positive().default(5 * 60 * 1000),
+  /** Max time (ms) a database query may run before timing out. */
+  DB_QUERY_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  /** Max time (ms) a receipt can spend in processing before being marked as failed. */
+  RECEIPT_PROCESSING_TIMEOUT_MS: z.coerce.number().int().positive().default(5 * 60 * 1000),
+  /** Circuit breaker: trip after this many consecutive Gemini failures across all jobs. */
+  CIRCUIT_BREAKER_THRESHOLD: z.coerce.number().int().positive().default(10),
+  /** Circuit breaker: time (ms) to keep the circuit open before allowing a probe request. */
+  CIRCUIT_BREAKER_RESET_MS: z.coerce.number().int().positive().default(60_000),
   /** Allow the queue to be used when Redis is unreachable (dev convenience). */
   QUEUE_OPTIONAL: boolish.default(false),
 });

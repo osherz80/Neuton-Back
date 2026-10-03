@@ -13,6 +13,20 @@ const logger = pino({
 });
 
 /**
+ * Creates a promise that rejects after the configured Gemini request timeout.
+ * Used to enforce a hard deadline on the underlying HTTP call since the
+ * Google GenAI SDK does not yet accept an AbortSignal on generateContent.
+ */
+function createGeminiTimeout(): Promise<never> {
+  return new Promise((_, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Gemini request timed out after ${env.GEMINI_REQUEST_TIMEOUT_MS}ms`));
+    }, env.GEMINI_REQUEST_TIMEOUT_MS);
+    timer.unref(); // Don't prevent process exit while waiting
+  });
+}
+
+/**
  * Vision models to draw from. Google serves each model from its own capacity
  * pool, so a 503 on one frequently succeeds on another — that rotation is the
  * whole point. Selection is random rather than in-order: every worker walking
@@ -255,15 +269,18 @@ async function runStructured<T>(kind: MediaKind, part: Part): Promise<T | null> 
     attemptedModels.add(model);
 
     try {
-      const response = await client.models.generateContent({
-        model,
-        contents: [{ role: 'user', parts: [part, { text: instruction }] }],
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: JSON.parse(schema) as unknown as Record<string, unknown>,
-          temperature: 0.1,
-        },
-      });
+      const response = await Promise.race([
+        client.models.generateContent({
+          model,
+          contents: [{ role: 'user', parts: [part, { text: instruction }] }],
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: JSON.parse(schema) as unknown as Record<string, unknown>,
+            temperature: 0.1,
+          },
+        }),
+        createGeminiTimeout(),
+      ]);
 
       const text = response.text;
       if (!text) throw new UnusableResponseError(model, 'returned no text');

@@ -24,6 +24,7 @@ import { isPermanentError, publicFailureMessage } from './lib/jobErrors.js';
 import { money, quantity as qty, toNumber, unitCost } from './lib/money.js';
 import { applyWeightedAverage, calculateRetailPrice, calculateUnitCost } from './lib/pricing.js';
 import { env, isDevelopment } from './env.js';
+import { geminiCircuitBreaker, CircuitOpenError } from './lib/circuitBreaker.js';
 
 const logger = pino({
   // A test run should assert on output, not emit a wall of JSON between cases.
@@ -492,15 +493,33 @@ export async function recordTerminalFailure(
 /**
  * Routes a job to its handler and translates failures into BullMQ semantics.
  * Permanent errors stop the retry schedule and surface a shop-safe message.
+ * Also enforces an overall processing deadline and respects the circuit breaker.
  */
 export async function runJob(
   data: MediaJobData,
   job: Job<MediaJobData>,
   deps: WorkerDeps = defaultWorkerDeps,
 ): Promise<void> {
-  logger.info({ jobId: job.id, kind: data.kind, shopId: data.shopId }, 'job started');
+  const jobLogger = logger.child({ jobId: job.id, kind: data.kind, shopId: data.shopId });
+  jobLogger.info('job started');
+
+  // Check circuit breaker before starting
+  if (!geminiCircuitBreaker.canExecute()) {
+    const status = geminiCircuitBreaker.getStatus();
+    jobLogger.warn({ circuitState: status.state, failureCount: status.failureCount }, 'circuit breaker open, failing fast');
+    throw new CircuitOpenError(env.CIRCUIT_BREAKER_RESET_MS);
+  }
+
+  // Overall deadline for the entire job (including retries within the job)
+  const deadline = Date.now() + env.RECEIPT_PROCESSING_TIMEOUT_MS;
+  const checkDeadline = () => {
+    if (Date.now() > deadline) {
+      throw new Error(`Job exceeded overall processing deadline of ${env.RECEIPT_PROCESSING_TIMEOUT_MS}ms`);
+    }
+  };
 
   try {
+    checkDeadline();
     switch (data.kind) {
       case 'receipt':
         await processReceipt(deps, data, job);
@@ -515,7 +534,14 @@ export async function runJob(
       default:
         throw new Error(`Unsupported job kind: ${String(data.kind)}`);
     }
+    // Record success for circuit breaker
+    geminiCircuitBreaker.recordSuccess();
   } catch (error) {
+    // Record failure for circuit breaker (but not for permanent errors or circuit open)
+    if (!(error instanceof CircuitOpenError) && !isPermanentError(error)) {
+      geminiCircuitBreaker.recordFailure();
+    }
+
     // Billing/auth/malformed-payload errors will not resolve on retry, so
     // drop them straight to failed instead of spending the backoff schedule.
     if (isPermanentError(error)) {
@@ -525,7 +551,7 @@ export async function runJob(
     throw error;
   }
 
-  logger.info({ jobId: job.id, kind: data.kind }, 'job completed');
+  jobLogger.info('job completed');
 }
 
 /**
@@ -547,6 +573,8 @@ function startWorker(): void {
   const worker = new Worker<MediaJobData>(QUEUE_NAME, (job) => runJob(job.data, job), {
     connection: createRedisConnection(),
     concurrency: env.RECEIPT_WORKER_CONCURRENCY,
+    /** Duration of the lock for the job in milliseconds. If the lock is lost, the job will be moved back to wait. */
+    lockDuration: env.JOB_LOCK_DURATION_MS,
   });
 
   worker.on('completed', (job) => logger.info({ jobId: job.id }, 'job done'));
@@ -554,7 +582,7 @@ function startWorker(): void {
     logger.error({ jobId: job?.id, err: error }, 'job failed');
     // Covers transient errors that ran out of attempts, so the receipt row does
     // not stay on "processing" with no explanation.
-    if (job && error instanceof UnrecoverableError) return;
+    if (job && (error instanceof UnrecoverableError || error instanceof CircuitOpenError)) return;
     if (!job) return;
     void recordTerminalFailure(defaultWorkerDeps, job.data, error);
   });

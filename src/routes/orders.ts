@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { db } from '../db/client.js';
 import { orderItems, orders, recipes } from '../db/schema/index.js';
@@ -109,7 +109,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
       })
       .parse(request.query);
 
-    const conditions = [eq(orders.shopId, shop.id)];
+    const conditions = [eq(orders.shopId, shop.id), isNull(orders.deletedAt)];
     if (query.from) conditions.push(sql`${orders.orderDate} >= ${query.from}`);
     if (query.to) conditions.push(sql`${orders.orderDate} <= ${query.to}`);
     if (query.search) {
@@ -145,7 +145,7 @@ export const orderRoutes: FastifyPluginAsync = async (app) => {
     const rows = await db
       .select()
       .from(orders)
-      .where(and(eq(orders.id, id), eq(orders.shopId, shop.id)))
+      .where(and(eq(orders.id, id), eq(orders.shopId, shop.id), isNull(orders.deletedAt)))
       .limit(1);
     const order = rows[0];
     if (!order) throw notFound('Order not found');
