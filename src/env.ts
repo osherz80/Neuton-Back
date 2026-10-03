@@ -53,7 +53,7 @@ const envSchema = z.object({
    * Distinct models tried per job attempt. Each failure sidelines that model,
    * so these are picks from the un-flagged remainder rather than repeats.
    */
-  GEMINI_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(4).default(3),
+  GEMINI_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(4).default(2),
   /** Backoff before the first retry, in ms. Doubles up to GEMINI_RETRY_MAX_DELAY_MS. */
   GEMINI_RETRY_BASE_DELAY_MS: z.coerce.number().int().min(0).default(1000),
   GEMINI_RETRY_MAX_DELAY_MS: z.coerce.number().int().min(0).default(10_000),
@@ -74,6 +74,12 @@ const envSchema = z.object({
   RATE_LIMIT_WINDOW: z.string().default('1 minute'),
   /** BullMQ concurrency for the receipt vision pipeline. */
   RECEIPT_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  /** Max time a receipt can spend in processing before being marked as failed (ms). */
+  RECEIPT_PROCESSING_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  /** Circuit breaker: trip after this many consecutive Gemini failures across all jobs. */
+  CIRCUIT_BREAKER_THRESHOLD: z.coerce.number().int().positive().default(10),
+  /** Circuit breaker: time (ms) to keep the circuit open before allowing a probe request. */
+  CIRCUIT_BREAKER_RESET_MS: z.coerce.number().int().positive().default(60_000),
   /** Allow the queue to be used when Redis is unreachable (dev convenience). */
   QUEUE_OPTIONAL: boolish.default(false),
 });

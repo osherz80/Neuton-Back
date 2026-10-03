@@ -13,6 +13,14 @@ const logger = pino({
 });
 
 /**
+ * Creates an AbortSignal that aborts after the configured Gemini request timeout.
+ * Uses AbortSignal.timeout() (Node 18+) for a clean, native timeout.
+ */
+function createGeminiAbortSignal(): AbortSignal {
+  return AbortSignal.timeout(env.GEMINI_REQUEST_TIMEOUT_MS);
+}
+
+/**
  * Vision models to draw from. Google serves each model from its own capacity
  * pool, so a 503 on one frequently succeeds on another — that rotation is the
  * whole point. Selection is random rather than in-order: every worker walking
@@ -263,6 +271,7 @@ async function runStructured<T>(kind: MediaKind, part: Part): Promise<T | null> 
           responseSchema: JSON.parse(schema) as unknown as Record<string, unknown>,
           temperature: 0.1,
         },
+        abortSignal: createGeminiAbortSignal(),
       });
 
       const text = response.text;
