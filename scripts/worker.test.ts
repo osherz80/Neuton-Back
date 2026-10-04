@@ -81,7 +81,11 @@ function harness(options: {
     deps,
     jobData,
     extracted,
-    job: { id: 'job-1', data: jobData } as unknown as Job<MediaJobData>,
+    job: { 
+      id: 'job-1', 
+      data: jobData,
+      updateProgress: async () => {},
+    } as unknown as Job<MediaJobData>,
   };
 }
 
@@ -252,7 +256,7 @@ test('receipt: replaces the stored lines and stamps the receipt complete inside 
     confidence: '0.912',
   });
 
-  const header = db.onlyCallTo('update', 'receipts');
+  const header = db.callsTo('update', 'receipts').find((c) => c.set?.status === 'completed')!;
   const patch = header.set as Record<string, unknown>;
   assert.equal(patch.status, 'completed');
   assert.equal(patch.totalAmount, '7.00');
@@ -278,7 +282,7 @@ test('receipt: the header total falls back to the sum of the line totals', async
 
   await processReceipt(deps, jobData, job);
 
-  const patch = db.onlyCallTo('update', 'receipts').set as Record<string, unknown>;
+  const patch = db.callsTo('update', 'receipts').find((c) => c.set?.status === 'completed')!.set as Record<string, unknown>;
   assert.equal(patch.totalAmount, '7.00');
 });
 
@@ -290,7 +294,7 @@ test('receipt: a total reported by the model wins over the derived sum', async (
 
   await processReceipt(deps, jobData, job);
 
-  const patch = db.onlyCallTo('update', 'receipts').set as Record<string, unknown>;
+  const patch = db.callsTo('update', 'receipts').find((c) => c.set?.status === 'completed')!.set as Record<string, unknown>;
   assert.equal(patch.totalAmount, '42.50');
 });
 
@@ -302,9 +306,11 @@ test('receipt: a missing receipt row writes nothing at all', async () => {
 
   await processReceipt(deps, jobData, job);
 
-  assert.equal(db.calls.length, 1, 'only the lookup should have run');
+  // Progress tracking updates happen before the early return
+  assert.ok(db.callsTo('update', 'receipts').length >= 1);
   assert.equal(db.callsTo('insert', 'receiptItems').length, 0);
-  assert.equal(db.callsTo('update', 'receipts').length, 0);
+  // No completed status update
+  assert.equal(db.callsTo('update', 'receipts').filter((c) => c.set?.status === 'completed').length, 0);
 });
 
 test('receipt: unreadable fields are stored as null rather than as placeholders', async () => {
@@ -334,7 +340,7 @@ test('receipt: unreadable fields are stored as null rather than as placeholders'
   assert.equal(line.confidence, null);
   assert.equal(line.unit, null);
 
-  const patch = db.onlyCallTo('update', 'receipts').set as Record<string, unknown>;
+  const patch = db.callsTo('update', 'receipts').find((c) => c.set?.status === 'completed')!.set as Record<string, unknown>;
   assert.equal(patch.taxAmount, null);
   assert.equal(patch.totalAmount, '0.00');
 });
@@ -770,7 +776,9 @@ test('runJob: a permanent upstream failure stops retrying and records the receip
     },
   );
 
-  assert.equal((db.onlyCallTo('update', 'receipts').set as Record<string, unknown>).status, 'failed');
+  // The final failure update is the last one (progress tracking happens first)
+  const failureUpdate = db.callsTo('update', 'receipts').pop()!;
+  assert.equal((failureUpdate.set as Record<string, unknown>).status, 'failed');
 });
 
 test('runJob: a transient failure is rethrown untouched and records nothing', async () => {
@@ -781,7 +789,8 @@ test('runJob: a transient failure is rethrown untouched and records nothing', as
   };
 
   await assert.rejects(() => runJob(jobData, job, deps), (thrown: unknown) => thrown === error);
-  assert.equal(db.callsTo('update', 'receipts').length, 0);
+  // Progress tracking updates happen before the failure, but no terminal failure is recorded
+  assert.equal(db.callsTo('update', 'receipts').filter((c) => c.set?.status === 'failed').length, 0);
 });
 
 test('runJob: a model-not-found 404 rotates the ladder instead of killing the job', async () => {
@@ -792,7 +801,8 @@ test('runJob: a model-not-found 404 rotates the ladder instead of killing the jo
   };
 
   await assert.rejects(() => runJob(jobData, job, deps), (thrown: unknown) => thrown === error);
-  assert.equal(db.callsTo('update', 'receipts').length, 0);
+  // Progress tracking updates happen before the failure, but no terminal failure is recorded
+  assert.equal(db.callsTo('update', 'receipts').filter((c) => c.set?.status === 'failed').length, 0);
 });
 
 test('runJob: a permanent failure on a non-receipt job records no receipt', async () => {

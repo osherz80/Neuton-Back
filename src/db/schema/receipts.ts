@@ -14,6 +14,16 @@ import { RECEIPT_STATUSES } from './enums.js';
 import { inventoryItems } from './catalog.js';
 import { profiles, shops } from './identity.js';
 
+export const RECEIPT_PROGRESS_STAGES = [
+  'pending',
+  'extracting',
+  'validating',
+  'applying',
+  'completed',
+  'failed',
+] as const;
+export type ReceiptProgressStage = (typeof RECEIPT_PROGRESS_STAGES)[number];
+
 export const receipts = pgTable('receipts', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   shopId: uuid('shop_id')
@@ -32,6 +42,10 @@ export const receipts = pgTable('receipts', {
   taxAmount: numeric('tax_amount', { precision: 12, scale: 2 }),
   currency: char('currency', { length: 3 }),
   status: text('status', { enum: RECEIPT_STATUSES }).notNull().default('pending'),
+  progressStage: text('progress_stage', { enum: RECEIPT_PROGRESS_STAGES }).default('pending'),
+  progressMessage: text('progress_message'),
+  processingStartedAt: timestamp('processing_started_at', { withTimezone: true }),
+  processingDeadline: timestamp('processing_deadline', { withTimezone: true }),
   rawExtraction: jsonb('raw_extraction'),
   errorMessage: text('error_message'),
   processedAt: timestamp('processed_at', { withTimezone: true }),

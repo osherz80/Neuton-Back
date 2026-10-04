@@ -66,6 +66,8 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
           originalFilename: body.originalFilename ?? null,
           status: 'pending',
           currency: shop.currency,
+          progressStage: 'pending',
+          progressMessage: 'Uploading document',
         })
         .returning({ id: receipts.id });
       receiptId = rows[0]?.id ?? null;
@@ -115,6 +117,8 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
             originalFilename: body.originalFilename ?? null,
             status: 'pending',
             currency: shop.currency,
+            progressStage: 'pending',
+            progressMessage: 'Queued for processing',
           })
           .returning({ id: receipts.id });
         receiptId = rows[0]?.id ?? null;
@@ -124,6 +128,8 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
           .set({
             status: 'processing',
             contentType: body.contentType,
+            progressStage: 'pending',
+            progressMessage: 'Queued for processing',
             updatedAt: new Date(),
           })
           .where(
@@ -223,7 +229,15 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
 
     await db
       .update(receipts)
-      .set({ status: 'processing', errorMessage: null, updatedAt: new Date() })
+      .set({
+        status: 'processing',
+        errorMessage: null,
+        progressStage: 'pending',
+        progressMessage: null,
+        processingStartedAt: null,
+        processingDeadline: null,
+        updatedAt: new Date(),
+      })
       .where(eq(receipts.id, id));
 
     const enqueued = await enqueueMediaJob({
@@ -244,7 +258,14 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
 
     const rows = await db
-      .select({ status: receipts.status, errorMessage: receipts.errorMessage })
+      .select({
+        status: receipts.status,
+        errorMessage: receipts.errorMessage,
+        progressStage: receipts.progressStage,
+        progressMessage: receipts.progressMessage,
+        processingStartedAt: receipts.processingStartedAt,
+        processingDeadline: receipts.processingDeadline,
+      })
       .from(receipts)
       .where(and(eq(receipts.id, id), eq(receipts.shopId, shop.id)))
       .limit(1);

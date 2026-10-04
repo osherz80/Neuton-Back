@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { db, type Database } from '../db/client.js';
 import {
@@ -90,7 +90,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
             count: sql<number>`count(*)::int`,
           })
           .from(orders)
-          .where(and(eq(orders.shopId, shop.id), sql`${orders.orderDate} >= ${start}`)),
+          .where(and(eq(orders.shopId, shop.id), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${start}`)),
         deps.db
           .select({ expenses: sql<string>`coalesce(sum(${receipts.totalAmount}),0)` })
           .from(receipts)
@@ -111,6 +111,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
           .where(
             and(
               eq(orders.shopId, shop.id),
+              isNull(orders.deletedAt),
               sql`${orders.orderDate} >= ${previousStart}`,
               sql`${orders.orderDate} < ${start}`,
             ),
@@ -184,7 +185,7 @@ export const analyticsRoutes: FastifyPluginAsync = async (app) => {
     const rows = await deps.db
       .select()
       .from(orders)
-      .where(eq(orders.shopId, shop.id))
+      .where(and(eq(orders.shopId, shop.id), isNull(orders.deletedAt)))
       .orderBy(desc(orders.orderDate))
       .limit(limit);
 
@@ -229,7 +230,7 @@ async function topPerformingItem(deps: AnalyticsDeps, shopId: string, start: Dat
     .from(orderItems)
     .innerJoin(recipes, eq(recipes.id, orderItems.recipeId))
     .innerJoin(orders, eq(orders.id, orderItems.orderId))
-    .where(and(eq(orderItems.shopId, shopId), sql`${orders.orderDate} >= ${start}`))
+    .where(and(eq(orderItems.shopId, shopId), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${start}`))
     .groupBy(recipes.id, recipes.name, recipes.imageUrl)
     .orderBy(desc(sql`coalesce(sum(${orderItems.quantity}),0)`))
     .limit(1);
@@ -255,7 +256,7 @@ async function orderProfitStats(deps: AnalyticsDeps, shopId: string, start: Date
       netProfit: sql<string>`${orders.totalAmount} - ${orders.deliveryFee} - ${orders.totalCost}`,
     })
     .from(orders)
-    .where(and(eq(orders.shopId, shopId), sql`${orders.orderDate} >= ${start}`));
+    .where(and(eq(orders.shopId, shopId), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${start}`));
 
   const profits = rows.map((row) => toNumber(row.netProfit));
   return {
@@ -306,7 +307,7 @@ async function profitGraph(deps: AnalyticsDeps, shopId: string, period: Period, 
       cost: sql<string>`coalesce(sum(${orders.totalCost}),0)`,
     })
     .from(orders)
-    .where(and(eq(orders.shopId, shopId), sql`${orders.orderDate} >= ${start}`))
+    .where(and(eq(orders.shopId, shopId), isNull(orders.deletedAt), sql`${orders.orderDate} >= ${start}`))
     .groupBy(sql`date_trunc('day', ${orders.orderDate} at time zone 'UTC')`)
     .orderBy(sql`date_trunc('day', ${orders.orderDate} at time zone 'UTC')`);
 
